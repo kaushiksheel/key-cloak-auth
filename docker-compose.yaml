@@ -10,11 +10,13 @@ services:
       - KC_HOSTNAME_STRICT=false
       - KC_HTTP_ENABLED=true
       - KC_PROXY=edge
+      - KC_HOSTNAME=localhost
     ports:
       - "8080:8080"
     command: 
       - start-dev
       - --hostname-strict=false
+      - --hostname=localhost
 
   backend:
     build: ./backend

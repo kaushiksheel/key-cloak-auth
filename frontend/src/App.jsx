@@ -7,6 +7,7 @@ const App = () => {
   const [authenticated, setAuthenticated] = useState(false);
   const [publicData, setPublicData] = useState("");
   const [protectedData, setProtectedData] = useState("");
+  const [initError, setInitError] = useState(null);
 
   const initKeycloak = useCallback(async () => {
     const keycloakInstance = new Keycloak({
@@ -23,6 +24,9 @@ const App = () => {
         pkceMethod: "S256",
         checkLoginIframe: false,
         enableLogging: true,
+        flow: "standard",
+        responseMode: "query",
+        tokenStorage: sessionStorage,
       });
 
       setKeycloak(keycloakInstance);
@@ -30,11 +34,34 @@ const App = () => {
 
       if (authenticated) {
         keycloakInstance.onTokenExpired = () => {
-          keycloakInstance.updateToken(30);
+          keycloakInstance
+            .updateToken(30)
+            .then((refreshed) => {
+              if (refreshed) {
+                console.log("Token refreshed successfully");
+              } else {
+                console.log(
+                  "Token not refreshed, valid for " +
+                    Math.round(
+                      keycloakInstance.tokenParsed.exp +
+                        keycloakInstance.timeSkew -
+                        new Date().getTime() / 1000
+                    ) +
+                    " seconds"
+                );
+              }
+            })
+            .catch(() => {
+              console.error("Failed to refresh token");
+              setAuthenticated(false);
+            });
         };
       }
     } catch (error) {
       console.error("Keycloak init error", error);
+      setInitError(
+        "Failed to initialize Keycloak. Please try refreshing the page."
+      );
     }
   }, []);
 
@@ -43,7 +70,8 @@ const App = () => {
   }, [initKeycloak]);
 
   const login = () => keycloak?.login();
-  const logout = () => keycloak?.logout();
+  const logout = () =>
+    keycloak?.logout({ redirectUri: window.location.origin });
 
   const fetchPublicData = async () => {
     try {
@@ -51,19 +79,47 @@ const App = () => {
       setPublicData(response.data.message);
     } catch (error) {
       console.error("Error fetching public data", error);
+      setPublicData("Failed to fetch public data");
     }
   };
 
   const fetchProtectedData = async () => {
-    try {
-      const response = await axios.get("http://localhost:3000/api/protected", {
-        headers: { Authorization: `Bearer ${keycloak?.token}` },
-      });
-      setProtectedData(response.data.message);
-    } catch (error) {
-      console.error("Error fetching protected data", error);
+    if (keycloak && keycloak.token) {
+      try {
+        const response = await axios.get(
+          "http://localhost:3000/api/protected",
+          {
+            headers: { Authorization: `Bearer ${keycloak.token}` },
+          }
+        );
+        setProtectedData(response.data.message);
+      } catch (error) {
+        console.error("Error fetching protected data", error);
+        if (error.response && error.response.status === 401) {
+          try {
+            const refreshed = await keycloak.updateToken(30);
+            if (refreshed) {
+              return fetchProtectedData();
+            } else {
+              console.log("Token not refreshed, please login again");
+              setAuthenticated(false);
+            }
+          } catch (refreshError) {
+            console.error("Failed to refresh token", refreshError);
+            setAuthenticated(false);
+          }
+        }
+        setProtectedData("Failed to fetch protected data");
+      }
+    } else {
+      console.error("Keycloak is not initialized or token is missing");
+      setProtectedData("Keycloak is not initialized or token is missing");
     }
   };
+
+  if (initError) {
+    return <div>{initError}</div>;
+  }
 
   if (!keycloak) {
     return <div>Loading...</div>;
